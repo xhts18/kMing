@@ -91,4 +91,4 @@ job_defaults = {
 scheduler = BackgroundScheduler()
 scheduler.configure(job_defaults=job_defaults,executors=executors)
 scheduler.add_job(myschedule, 'interval', seconds=5)
-scheduler.start()
+# scheduler.start()
