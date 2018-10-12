@@ -1,5 +1,8 @@
 import logging
 import  jqdatasdk
+import pandas
+logger = logging.getLogger('django')
+
 
 class JoinQuant:
 
@@ -17,3 +20,7 @@ class JoinQuant:
             return None
         price = df.iloc[-1]["close"]
         return price
+
+    def getHistoryPriceDf(self,security,startTime,endTime):
+        df = jqdatasdk.get_price(security, start_date=startTime, end_date=endTime, frequency=JoinQuant.frequency_1m)
+        return df

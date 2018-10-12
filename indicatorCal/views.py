@@ -15,7 +15,11 @@ import json
 @csrf_exempt
 def getAlert(request):
     global alert
-    return HttpResponse(content=(json.dumps(alert)))
+    for security in securityList:
+        if alert[security]:
+            return HttpResponse(content=(json.dumps({"monitor":True})))
+
+    return HttpResponse(content=(json.dumps({"monitor":False})))
 
 
 def index():
@@ -43,42 +47,65 @@ def buildPutJson(metric,timestamp,value,tag):
 
     return dataDict
 
+
 def myschedule():
-    global  startTime
+    # global  startTime
     global  joinQuant
 
 
-    endTime =  startTime + datetime.timedelta(minutes=1)
+    # endTime =  startTime + datetime.timedelta(minutes=1)
+    # startTimeStr = startTime.strftime(datetimeFormat)
+    # endTimeStr = endTime.strftime(datetimeFormat)
+
+    now = datetime.datetime.now()
+    fillSecondTime = datetime.datetime(year=now.year, month=now.month, day=now.day, hour=now.hour, minute=now.minute)
+    endTime = fillSecondTime + datetime.timedelta(minutes=-1)
+    startTime = fillSecondTime + datetime.timedelta(minutes=-2)
+
     startTimeStr = startTime.strftime(datetimeFormat)
     endTimeStr = endTime.strftime(datetimeFormat)
 
-    price = joinQuant.getLastMinutePrice(security,startTimeStr,endTimeStr)
+
+    logger.info("startTime : "+startTimeStr+" endTime : "+endTimeStr)
+
+    for security in securityList:
+        facade(security, startTimeStr, endTimeStr, endTime.timestamp() * 1000)
+
+
     startTime = endTime
 
+
+    logger.info(last_30min_price_list_dist)
+
+
+def facade(security,startTimeStr,endTimeStr,currentTimestamp):
+
+    price = joinQuant.getLastMinutePrice(security,startTimeStr,endTimeStr)
     if not price:
         logger.info("startTime : " + startTimeStr + " endTime : " + endTimeStr + " price is None")
         return
 
-    logger.info("startTime : " + startTimeStr + " endTime : " + endTimeStr + " price : " + str(price))
+    logger.info("startTime : " + startTimeStr + " endTime : " + endTimeStr + " price : " + str(price) +" security : "+security )
 
+
+    last_30min_price_list = last_30min_price_list_dist[security]
     last_30min_price_list.append(price)
 
 
-    currentTimestamp = endTime.timestamp()*1000
-#   写入tsdb
-    putJson = buildPutJson(real_price_metric,currentTimestamp,price,security)
-    tsdbClient.put('/api/put/?details',putJson)
+    #   写入tsdb
+    putJson = buildPutJson(real_price_metric, currentTimestamp, price, security)
+    tsdbClient.put('/api/put/?details', putJson)
 
     if len(last_30min_price_list) < 30:
         return
 
-#   布林带计算
-    logger.info("last_30min_price_list size "+ str(len(last_30min_price_list))+"startTime : " + startTimeStr + " endTime : " + endTimeStr)
-    bandCal(currentTimestamp,price)
+    #   布林带计算
+    bandCal(currentTimestamp, price,last_30min_price_list,security)
     last_30min_price_list.pop(0)
 
 
-def bandCal(timestamp,currentPrice):
+
+def bandCal(timestamp,currentPrice,last_30min_price_list,security):
 
     upperbandNdArray, middlebandNdArray, lowerbandNdArray = talib.BBANDS(np.array(last_30min_price_list), timeperiod=30,
                                                                          nbdevup=2, nbdevdn=2, matype=0)
@@ -90,16 +117,17 @@ def bandCal(timestamp,currentPrice):
     middlebandJson = buildPutJson(middle_band_metric,timestamp,middleband,security)
     lowbandJson = buildPutJson(low_band_metric,timestamp,lowband,security)
 
-    tsdbClient.put('/api/put/?details',upperbandJson)
-    tsdbClient.put('/api/put/?details',middlebandJson)
-    tsdbClient.put('/api/put/?details',lowbandJson)
+    tsdbClient.put(upperbandJson)
+    tsdbClient.put(middlebandJson)
+    tsdbClient.put(lowbandJson)
 
     global alert
 
+
     if currentPrice >= upperband or currentPrice <= lowband:
-        alert["monitor"] = True
+        alert[security] = True
     else:
-        alert["monitor"] = False
+        alert[security] = False
 
 
 # 初始化变量
@@ -114,12 +142,14 @@ logger = logging.getLogger('django')
 
 
 # 数据源客户端初始化
-joinQuant = JoinQuant()
-security = 'M1901.XDCE'
-
+# joinQuant = JoinQuant()
+# securityList = ['M1901.XDCE','SR9999.XZCE','RB9999.XSGE']
+securityList = ['M1901.XDCE']
 
 # 内存list
-last_30min_price_list = []
+last_30min_price_list_dist = {}
+for security in securityList:
+    last_30min_price_list_dist[security] = []
 
 #  tsdb客户端
 tsdbClient = TsdbClient('http://localhost:4242')
@@ -136,14 +166,15 @@ executors = {
 
 job_defaults = {
     'coalesce': False,
-    'max_instances': 10
+    'max_instances': 100
 }
 
 alert = {}
-alert["monitor"] = False
+for security in securityList:
+    alert[security] = False
 
 
-scheduler = BackgroundScheduler()
-scheduler.configure(job_defaults=job_defaults,executors=executors)
-scheduler.add_job(myschedule, 'interval', seconds=10)
-scheduler.start()
+# scheduler = BackgroundScheduler()
+# scheduler.configure(job_defaults=job_defaults,executors=executors)
+# scheduler.add_job(myschedule, 'interval', seconds=60)
+# scheduler.start()

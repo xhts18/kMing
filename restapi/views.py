@@ -19,11 +19,12 @@ def index(request):
     dictRequestBody = json.loads(bodyStr)
     start = dictRequestBody["start"]
     end = dictRequestBody["end"]
+    security = dictRequestBody["security"]
     # response的结构
     responseDataList = []
 
 
-    queryParam = buildParam(start,end,real_price_metric)
+    queryParam = buildParam(start,end,real_price_metric,security)
 
     # price
     realPriceResponse = requests.post(url, json=queryParam)
@@ -32,20 +33,20 @@ def index(request):
     initBuildResponse(responseDataList,realPriceDict)
 
     #  upper metric
-    queryParam = buildParam(start,end,upper_band_metric)
+    queryParam = buildParam(start,end,upper_band_metric,security)
     upperbandResponse = requests.post(url, json=queryParam)
     upperbandmetric = responseToJson(upperbandResponse)
     mergeResponse(responseDataList,upperbandmetric)
 
 
     #  middle metric
-    queryParam = buildParam(start, end, middle_band_metric)
+    queryParam = buildParam(start, end, middle_band_metric,security)
     middlebandResponse = requests.post(url, json=queryParam)
     middlebandmetric = responseToJson(middlebandResponse)
     mergeResponse(responseDataList,middlebandmetric)
 
     # low metric
-    queryParam = buildParam(start, end, low_band_metric)
+    queryParam = buildParam(start, end, low_band_metric,security)
     lowbandResponse = requests.post(url, json=queryParam)
     lowbandmetric = responseToJson(lowbandResponse)
     mergeResponse(responseDataList, lowbandmetric)
@@ -91,7 +92,7 @@ def initBuildResponse(queriesList,responseDict):
 
 
 
-def buildParam(start,end,metric):
+def buildParam(start,end,metric,security):
 
     queryParam = {}
     queryParam["start"] = start
@@ -127,10 +128,36 @@ def mergeResponse(resopnseDataList,responseDict):
         if name in keyset:
             obj[metric] = round(dps[name],2)
 
+@csrf_exempt
+def oneMetric(request):
+    url = domain + query_url
+
+    # 处理request 构造参数
+    bodyStr = request.body.decode("utf-8")
+    dictRequestBody = json.loads(bodyStr)
+    start = dictRequestBody["start"]
+    end = dictRequestBody["end"]
+    security = dictRequestBody["security"]
+    metric = dictRequestBody["metric"]
+
+    # response的结构
+    responseDataList = []
+
+    queryParam = buildParam(start, end, metric, security)
+
+    # price
+    realPriceResponse = requests.post(url, json=queryParam)
+    realPriceDict = responseToJson(realPriceResponse)
+
+
+    initBuildResponse(responseDataList, realPriceDict)
+    responseDataList.sort(key = lambda x:x["name"])
+    formatNameToFloat(responseDataList)
+    return HttpResponse(content=(json.dumps(responseDataList)))
+
 
 real_price_metric = "joinQuant.futures.price" # 数据源 + 证券类型 + 指标类型
 upper_band_metric = "indicator.band.upper"
 middle_band_metric = "indicator.band.middle"
 low_band_metric = "indicator.band.low"
 
-security = 'M1901.XDCE'

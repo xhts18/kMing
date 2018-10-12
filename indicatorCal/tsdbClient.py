@@ -5,9 +5,10 @@ class TsdbClient:
         self.domain = domain
         pass
 
-    def put(self,suffix,dataJson):
+    def put(self,dataJson):
+
         logger.info("putJson " + str(dataJson))
-        url = self.domain +suffix
+        url = self.domain +'/api/put/?details'
         requests.post(url,json=dataJson)
 
     def query(self,suffix):
