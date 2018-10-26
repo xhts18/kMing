@@ -20,6 +20,9 @@ class JoinQuant:
             return None
         price = df.iloc[-1]["close"]
         return price
+    def getLastMinuteDataFrame(self,security,startTime,endTime):
+        df = jqdatasdk.get_price(security,start_date=startTime,end_date=endTime,frequency=JoinQuant.frequency_1m)
+        return df
 
     def getHistoryPriceDf(self,security,startTime,endTime):
         df = jqdatasdk.get_price(security, start_date=startTime, end_date=endTime, frequency=JoinQuant.frequency_1m)

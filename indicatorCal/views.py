@@ -4,13 +4,12 @@ import logging
 import datetime
 from .dataNetSource import JoinQuant
 from .tsdbClient import  TsdbClient
-import  numpy as np
-import talib
 from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse
 import json
-
-
+from .utils import Utils
+from .bollingBand import BollingBand
+from .mfi import  MFI
 # Create your views here.
 @csrf_exempt
 def getAlert(request):
@@ -25,42 +24,22 @@ def getAlert(request):
 def index():
     pass
 
-# (1) 计算startTime,endTime
-# (2) 拿到当前最新一笔数据
-# (3) 存入内存list(维持最近的30个点)
-# (4) 存入tsdb
-# (5) 计算新指标
-#     )1 从内存list最近的30个点
-#     )2 若1没有数据,则从tsdb取最近的30个点
-#     )3 计算新指标
-#     )4 新指标存入tsdb
-
-def buildPutJson(metric,timestamp,value,tag):
-    dataDict = {}
-    dataDict["metric"] = metric
-    dataDict["timestamp"] = timestamp
-    dataDict["value"] = value
-
-    tagDict = {}
-    tagDict["security"] = tag
-    dataDict["tags"] = tagDict
-
-    return dataDict
 
 
 def myschedule():
-    # global  startTime
+    global  startTime
     global  joinQuant
 
 
-    # endTime =  startTime + datetime.timedelta(minutes=1)
-    # startTimeStr = startTime.strftime(datetimeFormat)
-    # endTimeStr = endTime.strftime(datetimeFormat)
+    endTime =  startTime + datetime.timedelta(minutes=1)
+    startTimeStr = startTime.strftime(datetimeFormat)
+    endTimeStr = endTime.strftime(datetimeFormat)
 
-    now = datetime.datetime.now()
-    fillSecondTime = datetime.datetime(year=now.year, month=now.month, day=now.day, hour=now.hour, minute=now.minute)
-    endTime = fillSecondTime + datetime.timedelta(minutes=-1)
-    startTime = fillSecondTime + datetime.timedelta(minutes=-2)
+
+    # now = datetime.datetime.now()
+    # fillSecondTime = datetime.datetime(year=now.year, month=now.month, day=now.day, hour=now.hour, minute=now.minute)
+    # endTime = fillSecondTime + datetime.timedelta(minutes=-1)
+    # startTime = fillSecondTime + datetime.timedelta(minutes=-2)
 
     startTimeStr = startTime.strftime(datetimeFormat)
     endTimeStr = endTime.strftime(datetimeFormat)
@@ -75,89 +54,82 @@ def myschedule():
     startTime = endTime
 
 
-    logger.info(last_30min_price_list_dist)
 
 
 def facade(security,startTimeStr,endTimeStr,currentTimestamp):
 
-    price = joinQuant.getLastMinutePrice(security,startTimeStr,endTimeStr)
-    if not price:
-        logger.info("startTime : " + startTimeStr + " endTime : " + endTimeStr + " price is None")
+    dataFrame = joinQuant.getLastMinuteDataFrame(security,startTimeStr,endTimeStr)
+
+
+    if len(dataFrame) != 1 and len(dataFrame) != 2:
+        logger.info("startTime : " + startTimeStr + " endTime : " + endTimeStr + " dataFrame len is not 1 or 2")
         return
 
-    logger.info("startTime : " + startTimeStr + " endTime : " + endTimeStr + " price : " + str(price) +" security : "+security )
+    close = dataFrame.iloc[-1]['close']
+    high = dataFrame.iloc[-1]['high']
+    low = dataFrame.iloc[-1]['low']
+    volume = dataFrame.iloc[-1]['volume']
 
 
-    last_30min_price_list = last_30min_price_list_dist[security]
-    last_30min_price_list.append(price)
+    logger.info("startTime : " + startTimeStr + " endTime : " + endTimeStr +" security : "+security+  " close : " + str(close)+" high : "+str(high)+" low : "+str(low)+" volume : "+str(volume))
 
+    global last_15min_close_price_list
+    global last_15min_high_price_list
+    global last_15min_low_price_list
+    global last_15min_volume_list
 
-    #   写入tsdb
-    putJson = buildPutJson(real_price_metric, currentTimestamp, price, security)
-    tsdbClient.put('/api/put/?details', putJson)
+    last_15min_close_price_list.append(close)
+    last_15min_high_price_list.append(high)
+    last_15min_low_price_list.append(low)
+    last_15min_volume_list.append(volume)
 
-    if len(last_30min_price_list) < 30:
-        return
+    closePricePutJson =  utils.buildPutJson(real_price_metric,currentTimestamp, close, security)
+    tsdbClient.put(closePricePutJson)
 
-    #   布林带计算
-    bandCal(currentTimestamp, price,last_30min_price_list,security)
-    last_30min_price_list.pop(0)
+    # 布林带和mfi
+    if len(last_15min_close_price_list) >=15:
+        bollingBand.calReal(currentTimestamp, last_15min_close_price_list, security)
+        mfi.calReal(last_15min_high_price_list,last_15min_low_price_list,last_15min_close_price_list,last_15min_volume_list,currentTimestamp,security)
 
-
-
-def bandCal(timestamp,currentPrice,last_30min_price_list,security):
-
-    upperbandNdArray, middlebandNdArray, lowerbandNdArray = talib.BBANDS(np.array(last_30min_price_list), timeperiod=30,
-                                                                         nbdevup=2, nbdevdn=2, matype=0)
-    upperband = upperbandNdArray[-1]
-    middleband = middlebandNdArray[-1]
-    lowband = lowerbandNdArray[-1]
-
-    upperbandJson = buildPutJson(upper_band_metric,timestamp,upperband,security)
-    middlebandJson = buildPutJson(middle_band_metric,timestamp,middleband,security)
-    lowbandJson = buildPutJson(low_band_metric,timestamp,lowband,security)
-
-    tsdbClient.put(upperbandJson)
-    tsdbClient.put(middlebandJson)
-    tsdbClient.put(lowbandJson)
-
-    global alert
-
-
-    if currentPrice >= upperband or currentPrice <= lowband:
-        alert[security] = True
+        last_15min_close_price_list.pop(0)
+        last_15min_high_price_list.pop(0)
+        last_15min_low_price_list.pop(0)
+        last_15min_volume_list.pop(0)
     else:
-        alert[security] = False
+        mfi.mock(currentTimestamp,security)
 
 
 # 初始化变量
 
 # 日期
 datetimeFormat= '%Y-%m-%d %H:%M:%S'
-startTime = datetime.datetime.strptime('2018-09-19 09:00:00',datetimeFormat)
-
+startTime = datetime.datetime.strptime('2018-07-24 09:00:00',datetimeFormat)
 
 # 日志
 logger = logging.getLogger('django')
 
 
 # 数据源客户端初始化
-# joinQuant = JoinQuant()
 # securityList = ['M1901.XDCE','SR9999.XZCE','RB9999.XSGE']
-securityList = ['M1901.XDCE']
-
+securityList = ['SR9999.XZCE']
 # 内存list
-last_30min_price_list_dist = {}
-for security in securityList:
-    last_30min_price_list_dist[security] = []
+last_15min_close_price_list = []
+last_15min_high_price_list = []
+last_15min_low_price_list = []
+last_15min_volume_list = []
 
-#  tsdb客户端
-tsdbClient = TsdbClient('http://localhost:4242')
+
+
+
+# metric
 real_price_metric = "joinQuant.futures.price" # 数据源 + 证券类型 + 指标类型
-upper_band_metric = "indicator.band.upper"
-middle_band_metric = "indicator.band.middle"
-low_band_metric = "indicator.band.low"
 
+joinQuant = JoinQuant()
+utils = Utils()
+tsdbClient = TsdbClient("http://localhost:4242")
+
+bollingBand = BollingBand()
+mfi = MFI()
 # 任务
 executors = {
     'default': {'type': 'threadpool', 'max_workers': 1},
@@ -174,7 +146,7 @@ for security in securityList:
     alert[security] = False
 
 
-# scheduler = BackgroundScheduler()
-# scheduler.configure(job_defaults=job_defaults,executors=executors)
-# scheduler.add_job(myschedule, 'interval', seconds=60)
+scheduler = BackgroundScheduler()
+scheduler.configure(job_defaults=job_defaults,executors=executors)
+scheduler.add_job(myschedule, 'interval', seconds=15)
 # scheduler.start()

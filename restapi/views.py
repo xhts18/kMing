@@ -73,11 +73,12 @@ def responseToJson(response):
 
 def initBuildResponse(queriesList,responseDict):
 
-
     if not responseDict:
         return
     if not responseDict[0]:
         return
+
+
 
     dps = responseDict[0]["dps"]
     metric = responseDict[0]["metric"]
@@ -156,7 +157,46 @@ def oneMetric(request):
     return HttpResponse(content=(json.dumps(responseDataList)))
 
 
+
+@csrf_exempt
+def mulMetric(request):
+    pass
+    url = domain + query_url
+
+    # 处理request 构造参数
+    bodyStr = request.body.decode("utf-8")
+    dictRequestBody = json.loads(bodyStr)
+    start = dictRequestBody["start"]
+    end = dictRequestBody["end"]
+    security = dictRequestBody["security"]
+    metrics = dictRequestBody["metrics"]
+
+    responseDataList = []
+    lenMetrics = len(metrics)
+
+
+    for index in range(0,lenMetrics):
+        metric = metrics[index]
+
+        queryParam = buildParam(start, end, metric, security)
+
+        metricResponse = requests.post(url, json=queryParam)
+        responseDict = responseToJson(metricResponse)
+
+        if index == 0:
+            initBuildResponse(responseDataList, responseDict)
+        else:
+            mergeResponse(responseDataList, responseDict)
+
+    responseDataList.sort(key = lambda x:x["name"])
+    formatNameToFloat(responseDataList)
+
+    return HttpResponse(content=(json.dumps(responseDataList)))
+
+
+
 real_price_metric = "joinQuant.futures.price" # 数据源 + 证券类型 + 指标类型
+
 upper_band_metric = "indicator.band.upper"
 middle_band_metric = "indicator.band.middle"
 low_band_metric = "indicator.band.low"

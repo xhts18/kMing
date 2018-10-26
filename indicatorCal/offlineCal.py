@@ -1,30 +1,15 @@
 from .dataNetSource import JoinQuant
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.executors.pool import ProcessPoolExecutor
-import  numpy as np
-import talib
 import datetime
 import logging
+import talib
 
 from .tsdbClient import  TsdbClient
+from .utils import Utils
 
-
-joinQuant = JoinQuant()
-security = 'M1901.XDCE'
-
-
-
-
-real_price_metric = "joinQuant.futures.price" # 数据源 + 证券类型 + 指标类型
-upper_band_metric = "indicator.band.upper"
-middle_band_metric = "indicator.band.middle"
-low_band_metric = "indicator.band.low"
-
-ris_period = 29
-rsi_metric = "indicator.rsi"
-
-tsdbClient = TsdbClient('http://localhost:4242')
-
+from .mfi import MFI
+from .bollingBand import BollingBand
 
 executors = {
     'default': {'type': 'threadpool', 'max_workers': 1},
@@ -36,91 +21,171 @@ job_defaults = {
     'max_instances': 10
 }
 
-logger = logging.getLogger('django')
-
-
-def buildPutJson(metric,timestamp,value,tag):
-    dataDict = {}
-    dataDict["metric"] = metric
-    dataDict["timestamp"] = timestamp
-    dataDict["value"] = value
-
-    tagDict = {}
-    tagDict["security"] = tag
-    dataDict["tags"] = tagDict
-
-    return dataDict
-
 
 def myschedule():
     logger.info("begin offline schedule")
 
     costStart = datetime.datetime.now()
-    priceDateFrame = joinQuant.getHistoryPriceDf(security, startTimeStr, endTimeStr)
+
+    sugarPriceDataFrame = joinQuant.getHistoryPriceDf(sugar, startTimeStr, endTimeStr)
     costEnd = datetime.datetime.now()
 
     historyCost = (costEnd.timestamp() - costStart.timestamp()) * 1000
     logger.info(" getHistory cost " + str(historyCost))
 
 
-    row = priceDateFrame.shape[0]
+    row = sugarPriceDataFrame.shape[0]
+    logger.info("row: "+str(row))
 
     for i in range(1,row+1):
-        currentPriceDataFrame = priceDateFrame.iloc[i-1:i]
+        sugarPriceDf = sugarPriceDataFrame.iloc[i-1:i]
 
-        currentDateIndex = currentPriceDataFrame.index
+        currentDateIndex = sugarPriceDf.index
+
         dateStr = currentDateIndex.strftime(datetimeFormat)[0]
         dateTime = datetime.datetime.strptime(dateStr, datetimeFormat)
 
         currentTimestamp = dateTime.timestamp() * 1000
-        currentPrice = currentPriceDataFrame['close'].values[0]
 
-        putJson = buildPutJson(real_price_metric, currentTimestamp, currentPrice, security)
-        tsdbClient.put(putJson)
+        sugarPrice = sugarPriceDf['close'].values[0]
 
-
-
-        if i < 30:
-            # 写入ris
-            rsiJson = buildPutJson(rsi_metric, currentTimestamp, 0.0, security)
-            tsdbClient.put(rsiJson)
+        if  not sugarPrice:
             continue
+        sugarPutJson = utils.buildPutJson(real_price_metric, currentTimestamp, sugarPrice, sugar)
+        tsdbClient.put(sugarPutJson)
 
-        recent_30_min = priceDateFrame[i-30:i]['close'].values
 
 
-        upperbandNdArray, middlebandNdArray, lowerbandNdArray = talib.BBANDS(recent_30_min,
-                                                                             timeperiod=30,
-                                                                             nbdevup=2, nbdevdn=2, matype=0)
-        upperband = upperbandNdArray[-1]
-        middleband = middlebandNdArray[-1]
-        lowband = lowerbandNdArray[-1]
+        # mfi 计算
+        if i < 15:
+            mfi.mock(currentTimestamp,sugar)
+        else:
+            mfi.cal(sugarPriceDataFrame,i,currentTimestamp,sugar)
 
-        upperbandJson = buildPutJson(upper_band_metric, currentTimestamp, upperband, security)
-        middlebandJson = buildPutJson(middle_band_metric, currentTimestamp, middleband, security)
-        lowbandJson = buildPutJson(low_band_metric, currentTimestamp, lowband, security)
-
-        tsdbClient.put(upperbandJson)
-        tsdbClient.put(middlebandJson)
-        tsdbClient.put(lowbandJson)
-
-    #   RSI指标
-        rsi = round(talib.RSI(recent_30_min,ris_period)[-1],2)
-        rsiJson = buildPutJson(rsi_metric,currentTimestamp,rsi,security)
-        tsdbClient.put(rsiJson)
-
+        # 布林带计算
+        if i >= 14:
+            bollingBand.cal(sugarPriceDataFrame,i,currentTimestamp,sugar)
+        else:
+            bollingBand.mock(currentTimestamp,sugar)
 
     costEnd = datetime.datetime.now()
-
 
     allCost = (costEnd.timestamp() - costStart.timestamp()) * 1000
     logger.info("all Finish cost " + str(allCost))
 
+def task():
+    global endTimeStr
+    global startTimeStr
+    global datetimeFormat
+
+    for i in range(0,31):
+        logger.info("now startTime " + startTimeStr + " endTime : " + endTimeStr)
+
+        startTime = datetime.datetime.strptime(startTimeStr, datetimeFormat)
+        endTime = datetime.datetime.strptime(endTimeStr, datetimeFormat)
+
+        nextstartTime = startTime + datetime.timedelta(days=1)
+        nextEndTime = endTime + datetime.timedelta(days=1)
+
+        startTimeStr = nextstartTime.strftime(datetimeFormat)
+        endTimeStr = nextEndTime.strftime(datetimeFormat)
+
+        myschedule()
+
+
+
+
+
+utils = Utils()
+joinQuant = JoinQuant()
+tsdbClient = TsdbClient('http://localhost:4242')
+logger = logging.getLogger('django')
+
+# security = 'M1901.XDCE'
+sugar = 'SR9999.XZCE'
+# soyBean = 'Y9999.XDCE'
+# palm = 'P9999.XDCE'
+
+
+
+
+real_price_metric = "joinQuant.futures.price" # 数据源 + 证券类型 + 指标类型
+
 datetimeFormat= '%Y-%m-%d %H:%M:%S'
-startTimeStr = '2018-09-27 09:00:00'
-endTimeStr = '2018-09-27 15:00:00'
+startTimeStr = '2018-06-30 09:00:00'
+endTimeStr = '2018-06-30 15:00:00'
+
+
+mfi = MFI()
+bollingBand = BollingBand()
 
 scheduler = BackgroundScheduler()
 scheduler.configure(job_defaults=job_defaults,executors=executors)
-scheduler.add_job(myschedule, 'interval', seconds=15)
+scheduler.add_job(task, 'interval', seconds=300)
 # scheduler.start()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# macd = MACD()
+# dma = DMA()
+# bollingBand = BollingBand()
+# trix = Trix()
+# ema = EMA()
+# adx = ADX()
+
+
+
+# 布林带
+# if i < 30:
+#     bollingBand.mock(currentTimestamp,security)
+# elif i >= 30:
+#     bollingBand.cal(priceDateFrame,i,currentTimestamp,security)
+
+# ADX计算
+# if i < 30:
+#     adx.mock(currentTimestamp,security)
+# elif i >= 30:
+#     adx.cal(priceDateFrame,i,currentTimestamp,security)
+#     pass
+
+# EMA计算
+# if i >=60:
+#     ema.cal(priceDateFrame,i,currentTimestamp,security)
+
+# MACD计算
+# if i < 30:
+#     macd.mock(currentTimestamp,security)
+# if i >= 30:
+#     macd.cal(priceDateFrame,i,currentTimestamp,security)
+
+# DMA计算
+# if i < 20:
+#     dma.mockDma(currentTimestamp,security)
+# elif 20 <= i and i < 30:
+#     dma.mockAma(currentTimestamp,security)
+#     dma.calDma(priceDateFrame,i,currentTimestamp,security)
+# elif i >= 30:
+#     dma.calDma(priceDateFrame,i,currentTimestamp,security)
+#     dma.calAma(priceDateFrame, i, currentTimestamp, security)
+
+# Trix计算
+# if i < 30:
+#     trix.mock(currentTimestamp,security)
+# else:
+#     trix.cal(priceDateFrame,i,currentTimestamp,security)
